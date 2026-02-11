@@ -38,8 +38,8 @@ def plot_calculated_vs_experimental(predicted, actual, dataset_name, label, slop
     plt.fill_between(actual, lower_bound, upper_bound, color='red', alpha=0.4, label='95% Confidence Interval')
     
     plt.title(f'{dataset_name} set', fontsize = 14)
-    plt.xlabel('Experimental mlogk', fontsize = 12)
-    plt.ylabel('Predicted mlogk', fontsize = 12)
+    plt.xlabel('Experimental logk', fontsize = 12)
+    plt.ylabel('Predicted logk', fontsize = 12)
     plt.legend(fontsize = 10, loc = 'lower right', frameon= False)
     # plt.grid(True)
    
