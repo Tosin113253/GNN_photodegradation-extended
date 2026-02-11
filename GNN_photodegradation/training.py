@@ -16,6 +16,15 @@ from GNN_photodegradation.config import DATA_path, NUM_epochs
 from GNN_photodegradation.get_logger import get_logger
 logger = get_logger()
 
+import random, numpy as np, torch
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 
 def main():
@@ -57,45 +66,13 @@ def main():
     # Ensure all numerical features are of float type
     df[numerical_features] = df[numerical_features].astype(np.float32)
    
-    # Split dataset
-    # train_df, temp_df, train_idx, temp_idx = train_test_split(df, df.index, test_size=0.3, random_state=42)
-    # val_df, test_df, val_idx, test_idx = train_test_split(temp_df, temp_df.index, test_size=0.5, random_state=42)
-    # # logger.info(f"Dataset split into train ({len(train_df)}), validation ({len(val_df)}), and test ({len(test_df)}) sets.")
-    # train_idx = train_idx +1
-    # val_idx = val_idx +1 
-    # test_idx = test_idx +1
-    # ------------------ GroupKFold split by molecule (SMILES) ------------------ #
-    groups = df["Smile"]
-
-    gkf = GroupKFold(n_splits=5)
-
-    # Use the first fold as test, remaining for train+val
-    splits = list(gkf.split(df, groups=groups))
-    train_val_idx, test_idx = splits[0]
-    
-    train_val_df = df.iloc[train_val_idx]
-    test_df = df.iloc[test_idx]
-    
-    # Split train+val again (still grouped)
-    groups_train_val = train_val_df["Smile"]
-    gkf_inner = GroupKFold(n_splits=5)
-    inner_splits = list(gkf_inner.split(train_val_df, groups=groups_train_val))
-    
-    train_idx, val_idx = inner_splits[0]
-    
-    train_df = train_val_df.iloc[train_idx]
-    val_df = train_val_df.iloc[val_idx]
-    
-    # Keep indices for plotting
-    train_idx = train_df.index + 1
-    val_idx = val_df.index + 1
-    test_idx = test_df.index + 1
-    
-    logger.info(
-        f"GroupKFold split completed: "
-        f"Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}"
-    )
-    
+    Split dataset
+    train_df, temp_df, train_idx, temp_idx = train_test_split(df, df.index, test_size=0.3, random_state=42)
+    val_df, test_df, val_idx, test_idx = train_test_split(temp_df, temp_df.index, test_size=0.5, random_state=42)
+    # logger.info(f"Dataset split into train ({len(train_df)}), validation ({len(val_df)}), and test ({len(test_df)}) sets.")
+    train_idx = train_idx +1
+    val_idx = val_idx +1 
+    test_idx = test_idx +1
 
     
     # Create datasets
