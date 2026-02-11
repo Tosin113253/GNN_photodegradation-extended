@@ -89,7 +89,7 @@ def main():
     # Define loss and optimizer
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10)
     logger.info("Loss function and optimizer defined.")
     # Training loop
     PATIENCE = 50
