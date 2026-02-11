@@ -15,7 +15,7 @@ from GNN_photodegradation.plots import plot_calculated_vs_experimental, plot_pca
 from GNN_photodegradation.config import DATA_path, NUM_epochs
 from GNN_photodegradation.get_logger import get_logger
 logger = get_logger()
-
+from sklearn.model_selection import GroupKFold
 import random, numpy as np, torch
 
 SEED = 42
@@ -66,13 +66,22 @@ def main():
     # Ensure all numerical features are of float type
     df[numerical_features] = df[numerical_features].astype(np.float32)
    
-    Split dataset
-    train_df, temp_df, train_idx, temp_idx = train_test_split(df, df.index, test_size=0.3, random_state=42)
-    val_df, test_df, val_idx, test_idx = train_test_split(temp_df, temp_df.index, test_size=0.5, random_state=42)
-    # logger.info(f"Dataset split into train ({len(train_df)}), validation ({len(val_df)}), and test ({len(test_df)}) sets.")
-    train_idx = train_idx +1
-    val_idx = val_idx +1 
-    test_idx = test_idx +1
+    # Split dataset
+    # train_df, temp_df, train_idx, temp_idx = train_test_split(df, df.index, test_size=0.3, random_state=42)
+    # val_df, test_df, val_idx, test_idx = train_test_split(temp_df, temp_df.index, test_size=0.5, random_state=42)
+    # # logger.info(f"Dataset split into train ({len(train_df)}), validation ({len(val_df)}), and test ({len(test_df)}) sets.")
+    # train_idx = train_idx +1
+    # val_idx = val_idx +1 
+    # test_idx = test_idx +1
+    
+    
+    groups = df["Smile"]
+    
+    gkf = GroupKFold(n_splits=5)
+    train_idx, test_idx = next(gkf.split(df, groups=groups))
+    
+    train_df = df.iloc[train_idx]
+    test_df = df.iloc[test_idx]
 
     
     # Create datasets
@@ -111,7 +120,6 @@ def main():
             graphs = graphs.to(device)
             exp_feats = exp_feats.to(device)
             targets = targets.to(device)
-
             optimizer.zero_grad()
             outputs, _, _ = model(graphs, exp_feats)
             loss = criterion(outputs, targets)
