@@ -11,9 +11,9 @@ logger = get_logger()
 class Create_Dataset(Dataset):
     def __init__(self, dataframe, numerical_features, scaler=None):
         self.dataframe = dataframe.reset_index(drop=True)
-        self.smiles = self.dataframe['SMILES']
+        self.smiles = self.dataframe['Smile']
         self.experimental_feats = self.dataframe[numerical_features].values.astype(np.float32)
-        self.targets = self.dataframe['mlogk'].values.astype(np.float32)
+        self.targets = self.dataframe['logk'].values.astype(np.float32)
         # Standardize numerical features
         if scaler is None:
             self.scaler = StandardScaler()
