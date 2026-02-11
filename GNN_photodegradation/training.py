@@ -44,6 +44,19 @@ def main():
         logger.error(f"Failed to load dataset: {e}")
         return
 
+        # ------------------ Outlier removal based on logk range ------------------
+    initial_len = len(df)
+    
+    df = df[(df["logk"] >= -6) & (df["logk"] <= -1)]
+    
+    final_len = len(df)
+    logger.info(
+        f"Removed {initial_len - final_len} outliers based on logk range "
+        f"[-6, -1]. Remaining samples: {final_len}"
+    )
+    # ------------------------------------------------------------------------
+
+
     # Check required columns
     required_columns = {'Smile', 'logk', 'Intensity', 'Wavelength', 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor'}
     if not required_columns.issubset(df.columns):
