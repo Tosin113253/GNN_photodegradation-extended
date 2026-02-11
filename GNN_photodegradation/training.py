@@ -73,13 +73,6 @@ def main():
     train_idx = train_idx +1
     val_idx = val_idx +1 
     test_idx = test_idx +1
-    groups = df["Smile"]
-    
-    gkf = GroupKFold(n_splits=5)
-    train_idx, test_idx = next(gkf.split(df, groups=groups))
-    
-    train_df = df.iloc[train_idx]
-    test_df = df.iloc[test_idx]
 
     
 
