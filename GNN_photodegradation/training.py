@@ -35,7 +35,7 @@ def main():
         return
 
     # Check required columns
-    required_columns = {'Smile', 'logk', 'Intensity', 'Wavelength' 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor'}
+    required_columns = {'Smile', 'logk', 'Intensity', 'Wavelength', 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor'}
     if not required_columns.issubset(df.columns):
         logger.error(f"Dataset must contain the following columns: {required_columns}")
         return
