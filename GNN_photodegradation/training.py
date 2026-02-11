@@ -41,7 +41,7 @@ def main():
         return
 
     # Identify numerical features
-    numerical_features = ['Intensity', 'Wavelength' 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor']
+    numerical_features = ['Intensity', 'Wavelength', 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor']
     
     for feature in numerical_features:
         if not pd.api.types.is_numeric_dtype(df[feature]):
