@@ -35,13 +35,13 @@ def main():
         return
 
     # Check required columns
-    required_columns = {'SMILES', 'mlogk', 'I', 'T', 'D', 'C0', 'pH'}
+    required_columns = {'Smile', 'logk', 'Intensity', 'Wavelength' 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor'}
     if not required_columns.issubset(df.columns):
         logger.error(f"Dataset must contain the following columns: {required_columns}")
         return
 
     # Identify numerical features
-    numerical_features = ['I', 'T', 'D', 'C0', 'pH']
+    numerical_features = ['Intensity', 'Wavelength' 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor']
     
     for feature in numerical_features:
         if not pd.api.types.is_numeric_dtype(df[feature]):
@@ -159,7 +159,7 @@ def main():
     test_pred, test_tgt, test_feats, test_graph_feats, combined_test = collect_predictions(test_loader, model, device, criterion)
     # ----------------------------- Plotting Section ----------------------------- #
     
-    # 1. Calculated vs. Experimental mlogk Plots with SD of Slopes and Intercepts and regression results
+    # 1. Calculated vs. Experimental logk Plots with SD of Slopes and Intercepts and regression results
     results = []
     dsname = []
     for pred, tgt, name, label in zip([train_pred, val_pred, test_pred],
