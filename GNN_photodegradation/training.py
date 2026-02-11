@@ -93,7 +93,7 @@ def main():
     
     # Initialize model
     experimental_input_dim = train_dataset.experimental_feats.shape[1]
-    model = GNNModel(GAT_input_dim= 22, experimental_input_dim=experimental_input_dim)
+    model = GNNModel(22, experimental_input_dim=experimental_input_dim)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     logger.info(f"Model initialized and moved to {device}.")
