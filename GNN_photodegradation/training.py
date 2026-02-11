@@ -77,7 +77,7 @@ def main():
     test_df = df.iloc[test_idx]
     
     # Split train+val again (still grouped)
-    groups_train_val = train_val_df["SMILES"]
+    groups_train_val = train_val_df["Smile"]
     gkf_inner = GroupKFold(n_splits=5)
     inner_splits = list(gkf_inner.split(train_val_df, groups=groups_train_val))
     
