@@ -2,23 +2,26 @@ import os
 import random
 import numpy as np
 import pandas as pd
+
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-import numpy as np
-import shap
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from xgboost import XGBRegressor
-from sklearn.metrics import r2_score
+
+# OPTIONAL: Only used if you enable SHAP later.
+# Do NOT pip install inside this file.
+# import shap
+# import matplotlib.pyplot as plt
+
 from GNN_photodegradation.featurizer import Create_Dataset, collate_fn
 from GNN_photodegradation.models.gat_model import GNNModel
 from GNN_photodegradation.evaluations import collect_predictions, compute_regression_stats
@@ -44,6 +47,89 @@ torch.backends.cudnn.benchmark = False
 # ---------------------------------------------------------------
 
 out_prefix = "GAT"
+
+
+def _regression_metrics(y_true, y_pred):
+    y_true = np.asarray(y_true).reshape(-1)
+    y_pred = np.asarray(y_pred).reshape(-1)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae = float(mean_absolute_error(y_true, y_pred))
+    r2 = float(r2_score(y_true, y_pred))
+    return {"RMSE": rmse, "MAE": mae, "R2": r2}
+
+
+def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_col, out_prefix="baseline"):
+    """
+    Baseline models using ONLY experimental (tabular) features.
+    Saves metrics and (for RF) feature importance.
+    """
+    X_train = train_df[feature_cols].values
+    y_train = train_df[target_col].values
+    X_val   = val_df[feature_cols].values
+    y_val   = val_df[target_col].values
+    X_test  = test_df[feature_cols].values
+    y_test  = test_df[target_col].values
+
+    models = {
+        "Ridge": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", Ridge(alpha=1.0, random_state=SEED))
+        ]),
+        "RandomForest": RandomForestRegressor(
+            n_estimators=600,
+            random_state=SEED,
+            n_jobs=-1
+        ),
+        "XGBoost": XGBRegressor(
+            n_estimators=800,
+            learning_rate=0.03,
+            max_depth=6,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            random_state=SEED
+        )
+    }
+
+    rows = []
+    rf_featimp = None
+
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+
+        pred_train = model.predict(X_train)
+        pred_val   = model.predict(X_val)
+        pred_test  = model.predict(X_test)
+
+        rows.append({
+            "Model": name,
+            "Split": "Train",
+            **_regression_metrics(y_train, pred_train)
+        })
+        rows.append({
+            "Model": name,
+            "Split": "Val",
+            **_regression_metrics(y_val, pred_val)
+        })
+        rows.append({
+            "Model": name,
+            "Split": "Test",
+            **_regression_metrics(y_test, pred_test)
+        })
+
+        if name == "RandomForest":
+            rf_featimp = pd.DataFrame({
+                "feature": feature_cols,
+                "importance": model.feature_importances_
+            }).sort_values("importance", ascending=False)
+
+    metrics_df = pd.DataFrame(rows)
+    metrics_df.to_csv(f"{out_prefix}_metrics.csv", index=False)
+
+    if rf_featimp is not None:
+        rf_featimp.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
+
+    return metrics_df, rf_featimp
 
 
 def main():
@@ -81,7 +167,6 @@ def main():
         return
 
     # ----------------------- Coerce numeric ----------------------
-    # Make sure target + numeric features are numeric
     df["logk"] = pd.to_numeric(df["logk"], errors="coerce")
 
     numerical_features = [
@@ -96,9 +181,8 @@ def main():
     for col in numerical_features:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    feature_cols = ['Intensity', 'Wavelength', 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor']
-
-    target_col = 'logk'
+    feature_cols = numerical_features
+    target_col = "logk"
 
     # Drop rows with NaNs in required columns
     before = len(df)
@@ -124,101 +208,17 @@ def main():
     val_idx = val_idx + 1
     test_idx = test_idx + 1
 
-
-    #------------------------ Interpretability---------------------
-    # =========================
-    # SHAP beeswarm WITH Organic Contaminant (single feature)
-    # Put this AFTER collect_predictions(...)
-    # =========================
-    
-   # --- Collect predictions + features (must run before any vstack) ---
-       
-        train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(
-            train_loader, model, device, criterion
-        )
-        val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(
-            val_loader, model, device, criterion
-        )
-        test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
-            test_loader, model, device, criterion
-        )
-    
-        
-
-        
-        # 1) Stack experimental feats + graph feats (these are already aligned per row)
-        Xexp_all = np.vstack([train_feats, val_feats, test_feats])                 # (N, 7)
-        Xg_all   = np.vstack([train_graph_feats, val_graph_feats, test_graph_feats])  # (N, G)
-        
-        # 2) Compress graph features into ONE number => "Organic Contaminant"
-        pca = PCA(n_components=1, random_state=42)
-        organic_contaminant = pca.fit_transform(Xg_all).reshape(-1, 1)  # (N, 1)
-        
-        # 3) Final SHAP input matrix with 8 features total
-        X_all = np.hstack([Xexp_all, organic_contaminant])
-        
-        feature_names = list(numerical_features) + ["Organic Contaminant"]
-        # numerical_features should be:
-        # ['Intensity','Wavelength','Temp','Dosage','InitialC','Humid','Reactor']
-        
-        # 4) Choose what you want SHAP to explain:
-        #    A) explain the *GNN predictions* (recommended for interpretability of your GNN)
-        y_all = np.concatenate([train_pred.reshape(-1), val_pred.reshape(-1), test_pred.reshape(-1)])
-        
-        #    (If instead you want SHAP vs TRUE logk, use this)
-        # y_all = df.loc[np.r_[train_df.index, val_df.index, test_df.index], "logk"].values
-        
-        # 5) Train an interpretable surrogate model on these 8 features
-        surrogate = XGBRegressor(
-            n_estimators=900,
-            learning_rate=0.03,
-            max_depth=4,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.0,
-            random_state=42
-        )
-        surrogate.fit(X_all, y_all)
-        
-        print("Surrogate R2 (how well it matches target being explained):",
-              r2_score(y_all, surrogate.predict(X_all)))
-        
-        # 6) SHAP beeswarm
-        explainer = shap.TreeExplainer(surrogate)
-        shap_values = explainer.shap_values(X_all)
-        
-        plt.figure(figsize=(9, 5.5))
-        shap.summary_plot(
-            shap_values,
-            X_all,
-            feature_names=feature_names,
-            show=False,
-            plot_type="dot"
-        )
-        plt.tight_layout()
-        plt.savefig("SHAP_beeswarm_with_OrganicContaminant.png", dpi=400, bbox_inches="tight")
-        plt.show()
-        
-        print("Saved: SHAP_beeswarm_with_OrganicContaminant.png")
-
-    # -------------------------------------------------------------------------------
-
-
-    # ------------------- Baseline: Experimental features only -------------------
-    # This does NOT affect GNN training; it just creates a comparison for your paper.
+    # ------------------- Baseline: experimental only -------------------
     baseline_metrics, baseline_featimp = run_experimental_baselines(
         train_df=train_df,
         val_df=val_df,
         test_df=test_df,
-        feature_cols=numerical_features,   # <-- your experimental feature columns
-        target_col="logk",                 # <-- your target column
+        feature_cols=feature_cols,
+        target_col=target_col,
         out_prefix="baseline_experimental"
     )
-
-    logger.info("Baseline (experimental-only) metrics saved to baseline_experimental_metrics.csv")
-    if baseline_featimp is not None:
-        logger.info("Baseline (RF) feature importance saved to baseline_experimental_feature_importance.csv")
-    # --------------------------------------------------------------------------
+    logger.info("Baseline metrics saved to baseline_experimental_metrics.csv")
+    # ------------------------------------------------------------------
 
     # ----------------------- Create datasets ---------------------
     train_dataset = Create_Dataset(train_df, numerical_features)
@@ -228,21 +228,13 @@ def main():
     logger.info("Datasets created and features standardized.")
 
     # ----------------------- DataLoaders -------------------------
-    train_loader = DataLoader(
-        train_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn
-    )
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn)
     logger.info("Data loaders initialized.")
 
     # ----------------------- Model init --------------------------
     experimental_input_dim = train_dataset.experimental_feats.shape[1]
-
-    # Keep 22 unless you changed node feature size in featurizer.
     model = GNNModel(22, experimental_input_dim=experimental_input_dim)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -292,7 +284,6 @@ def main():
                 val_losses.append(loss.item())
 
         avg_val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
-
         scheduler.step(avg_val_loss)
         last_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else None
 
@@ -309,7 +300,7 @@ def main():
         else:
             patience_counter += 1
             if patience_counter >= PATIENCE:
-                print("Early stopping triggered.")
+                logger.info("Early stopping triggered.")
                 break
 
     # ----------------------- Evaluation --------------------------
@@ -374,23 +365,15 @@ def main():
     combined_graph_feats = np.vstack((train_graph_feats, val_graph_feats, test_graph_feats))
     combined_targets = np.vstack((train_tgt, val_tgt, test_tgt))
 
-    plot_pca(
-        combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-        "Combined", "2D PCA Plot", dimensions=2
-    )
-    plot_pca(
-        combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-        "Combined", "3D PCA Plot", dimensions=3
-    )
+    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
+             "Combined", "2D PCA Plot", dimensions=2)
+    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
+             "Combined", "3D PCA Plot", dimensions=3)
 
-    plot_umap(
-        combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-        "Combined", title="2D UMAP Plot", dimensions=2
-    )
-    plot_umap(
-        combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-        "Combined", title="3D UMAP Plot", dimensions=3
-    )
+    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
+              "Combined", title="2D UMAP Plot", dimensions=2)
+    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
+              "Combined", title="3D UMAP Plot", dimensions=3)
 
     logger.info("All plots have been generated and saved.")
 
