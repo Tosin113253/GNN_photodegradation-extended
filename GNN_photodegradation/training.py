@@ -3,6 +3,7 @@ import random
 import numpy as np
 import pandas as pd
 
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -13,11 +14,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-import matplotlib.pyplot as plt
 import shap
+import matplotlib.pyplot as plt
 from xgboost import XGBRegressor
 
 from GNN_photodegradation.featurizer import Create_Dataset, collate_fn
@@ -50,77 +50,83 @@ out_prefix = "GAT"
 def _regression_metrics(y_true, y_pred):
     y_true = np.asarray(y_true).reshape(-1)
     y_pred = np.asarray(y_pred).reshape(-1)
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    mae = float(mean_absolute_error(y_true, y_pred))
-    r2 = float(r2_score(y_true, y_pred))
-    return {"RMSE": rmse, "MAE": mae, "R2": r2}
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = float(np.sqrt(mse))
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    return {"MSE": float(mse), "RMSE": rmse, "MAE": float(mae), "r2": float(r2)}
 
 
-def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_col, out_prefix="baseline"):
+def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_col, out_prefix="baseline_experimental"):
     """
-    Baseline models using ONLY experimental (tabular) features.
-    Saves metrics and (for RF) feature importance.
+    Baselines using ONLY tabular features (experimental + OrganicContaminant_TE).
+    Saves:
+      - {out_prefix}_metrics.csv
+      - {out_prefix}_feature_importance.csv  (RF only)
+      - {out_prefix}_shap_beeswarm.png       (XGB shap, optional)
     """
     X_train = train_df[feature_cols].values
     y_train = train_df[target_col].values
-    X_val   = val_df[feature_cols].values
-    y_val   = val_df[target_col].values
-    X_test  = test_df[feature_cols].values
-    y_test  = test_df[target_col].values
 
-    models = {
-        "Ridge": Pipeline([
-            ("scaler", StandardScaler()),
-            ("model", Ridge(alpha=1.0, random_state=SEED))
-        ]),
-        "RandomForest": RandomForestRegressor(
-            n_estimators=600,
-            random_state=SEED,
-            n_jobs=-1
-        ),
-    }
+    X_val = val_df[feature_cols].values
+    y_val = val_df[target_col].values
 
-    rows = []
-    rf_featimp = None
+    X_test = test_df[feature_cols].values
+    y_test = test_df[target_col].values
 
-    for name, model in models.items():
-        model.fit(X_train, y_train)
+    results = []
 
-        pred_train = model.predict(X_train)
-        pred_val   = model.predict(X_val)
-        pred_test  = model.predict(X_test)
+    # ---- Ridge ----
+    ridge = Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", Ridge(alpha=1.0, random_state=SEED))
+    ])
+    ridge.fit(X_train, y_train)
+    results.append({"Model": "Ridge", "Split": "Train", **_regression_metrics(y_train, ridge.predict(X_train))})
+    results.append({"Model": "Ridge", "Split": "Val",   **_regression_metrics(y_val,   ridge.predict(X_val))})
+    results.append({"Model": "Ridge", "Split": "Test",  **_regression_metrics(y_test,  ridge.predict(X_test))})
 
-        rows.append({"Model": name, "Split": "Train", **_regression_metrics(y_train, pred_train)})
-        rows.append({"Model": name, "Split": "Val",   **_regression_metrics(y_val, pred_val)})
-        rows.append({"Model": name, "Split": "Test",  **_regression_metrics(y_test, pred_test)})
+    # ---- Random Forest ----
+    rf = RandomForestRegressor(
+        n_estimators=500,
+        random_state=SEED,
+        n_jobs=-1
+    )
+    rf.fit(X_train, y_train)
+    results.append({"Model": "RF", "Split": "Train", **_regression_metrics(y_train, rf.predict(X_train))})
+    results.append({"Model": "RF", "Split": "Val",   **_regression_metrics(y_val,   rf.predict(X_val))})
+    results.append({"Model": "RF", "Split": "Test",  **_regression_metrics(y_test,  rf.predict(X_test))})
 
-        if name == "RandomForest":
-            rf_featimp = pd.DataFrame({
-                "feature": feature_cols,
-                "importance": model.feature_importances_
-            }).sort_values("importance", ascending=False)
+    # RF feature importance
+    rf_imp = pd.DataFrame({
+        "Feature": feature_cols,
+        "Importance": rf.feature_importances_
+    }).sort_values("Importance", ascending=False)
+    rf_imp.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
 
-    metrics_df = pd.DataFrame(rows)
+    # ---- XGBoost ----
+    xgb = XGBRegressor(
+        n_estimators=2000,
+        learning_rate=0.02,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_lambda=1.0,
+        random_state=SEED,
+        n_jobs=-1
+    )
+    xgb.fit(X_train, y_train)
+    results.append({"Model": "XGB", "Split": "Train", **_regression_metrics(y_train, xgb.predict(X_train))})
+    results.append({"Model": "XGB", "Split": "Val",   **_regression_metrics(y_val,   xgb.predict(X_val))})
+    results.append({"Model": "XGB", "Split": "Test",  **_regression_metrics(y_test,  xgb.predict(X_test))})
+
+    metrics_df = pd.DataFrame(results)
     metrics_df.to_csv(f"{out_prefix}_metrics.csv", index=False)
 
-    if rf_featimp is not None:
-        rf_featimp.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
+    logger.info(f"Saved baseline metrics to {out_prefix}_metrics.csv")
+    logger.info(f"Saved RF feature importance to {out_prefix}_feature_importance.csv")
 
-    return metrics_df, rf_featimp
-
-
-def _get_smiles_from_dataset(dataset, fallback_df):
-    """
-    Tries to retrieve SMILES in the SAME ORDER as the dataset used by the DataLoader.
-    Falls back safely if Create_Dataset doesn't store df internally.
-    """
-    for attr in ["df", "data_df", "raw_df"]:
-        if hasattr(dataset, attr):
-            d = getattr(dataset, attr)
-            if isinstance(d, pd.DataFrame) and "Smile" in d.columns:
-                return d["Smile"].values
-    # fallback: same order as fallback_df (best effort)
-    return fallback_df["Smile"].values
+    return metrics_df, rf_imp
 
 
 def main():
@@ -150,6 +156,7 @@ def main():
         "InitialC",
         "Humid",
         "Reactor",
+        "OrganicContaminant_TE",
     }
     if not required_columns.issubset(df.columns):
         missing = sorted(list(required_columns - set(df.columns)))
@@ -172,16 +179,19 @@ def main():
     for col in numerical_features:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    feature_cols = numerical_features
-    target_col = "logk"
+    # OrganicContaminant_TE must be numeric
+    df["OrganicContaminant_TE"] = pd.to_numeric(df["OrganicContaminant_TE"], errors="coerce")
 
+    # Drop NaNs
     before = len(df)
-    df = df.dropna(subset=["Smile", "logk"] + numerical_features).copy()
+    df = df.dropna(subset=["Smile", "logk"] + numerical_features + ["OrganicContaminant_TE"]).copy()
     after = len(df)
     if after < before:
         logger.info(f"Dropped {before - after} rows due to NaNs in required columns.")
 
+    # Ensure float32
     df[numerical_features] = df[numerical_features].astype(np.float32)
+    df["OrganicContaminant_TE"] = df["OrganicContaminant_TE"].astype(np.float32)
     df["logk"] = df["logk"].astype(np.float32)
 
     # ----------------------- Split dataset -----------------------
@@ -197,19 +207,21 @@ def main():
     val_idx = val_idx + 1
     test_idx = test_idx + 1
 
-    # ------------------- Baseline: experimental only -------------------
+    # ------------------- Baseline: Experimental + OrganicContaminant_TE -------------------
+    baseline_feature_cols = numerical_features + ["OrganicContaminant_TE"]
     run_experimental_baselines(
         train_df=train_df,
         val_df=val_df,
         test_df=test_df,
-        feature_cols=feature_cols,
-        target_col=target_col,
+        feature_cols=baseline_feature_cols,
+        target_col="logk",
         out_prefix="baseline_experimental"
     )
-    logger.info("Baseline (experimental-only) metrics saved to baseline_experimental_metrics.csv")
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------------
 
-    # ----------------------- Create datasets ---------------------
+    # ----------------------- Create datasets (GNN) ---------------------
+    # NOTE: Create_Dataset uses ONLY numerical_features as experimental feats for the GNN.
+    # OrganicContaminant_TE is used in baseline interpretability/importance plots.
     train_dataset = Create_Dataset(train_df, numerical_features)
     scaler = train_dataset.scaler
     val_dataset = Create_Dataset(val_df, numerical_features, scaler=scaler)
@@ -259,6 +271,7 @@ def main():
 
         avg_train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
 
+        # Validation
         model.eval()
         val_losses = []
         with torch.no_grad():
@@ -272,6 +285,7 @@ def main():
                 val_losses.append(loss.item())
 
         avg_val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
+
         scheduler.step(avg_val_loss)
         last_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else None
 
@@ -280,6 +294,7 @@ def main():
             f"- Train Loss: {avg_train_loss:.4f} - Val Loss: {avg_val_loss:.4f}"
         )
 
+        # Early stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), "best_model.pth")
@@ -287,7 +302,7 @@ def main():
         else:
             patience_counter += 1
             if patience_counter >= PATIENCE:
-                logger.info("Early stopping triggered.")
+                print("Early stopping triggered.")
                 break
 
     # ----------------------- Evaluation --------------------------
@@ -295,95 +310,19 @@ def main():
     model.eval()
     logger.info("Best model loaded for evaluation.")
 
-    train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(
-        train_loader, model, device, criterion
-    )
-    val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(
-        val_loader, model, device, criterion
-    )
-    test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
-        test_loader, model, device, criterion
-    )
+    train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(train_loader, model, device, criterion)
+    val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(val_loader, model, device, criterion)
+    test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(test_loader, model, device, criterion)
 
-    # =========================================================
-    # SHAP beeswarm WITH Organic Contaminant (single feature)
-    # Put this AFTER collect_predictions(...)
-    # =========================================================
-    try:
-        # 1) Build target encoding from TRAIN ONLY
-        train_smiles = _get_smiles_from_dataset(train_dataset, train_df)
-        val_smiles   = _get_smiles_from_dataset(val_dataset, val_df)
-        test_smiles  = _get_smiles_from_dataset(test_dataset, test_df)
+    # ----------------------- Save GNN metrics ---------------------
+    gat_metrics = []
+    gat_metrics.append({"Split": "Training", **_regression_metrics(train_tgt, train_pred)})
+    gat_metrics.append({"Split": "Validation", **_regression_metrics(val_tgt, val_pred)})
+    gat_metrics.append({"Split": "Test", **_regression_metrics(test_tgt, test_pred)})
+    pd.DataFrame(gat_metrics).to_csv(f"{out_prefix}_metrics.csv", index=False)
+    logger.info(f"Saved GAT metrics to {out_prefix}_metrics.csv")
 
-        # train_df may have different order; use train_dataset order for mapping by making a Series from train_dataset df if available
-        # We compute mapping using the original train_df (safe and standard)
-        te_map = train_df.groupby("Smile")["logk"].mean().to_dict()
-        te_global = float(train_df["logk"].mean())
-
-        def to_te(smiles_arr):
-            return np.array([te_map.get(s, te_global) for s in smiles_arr], dtype=np.float32)
-
-        train_te = to_te(train_smiles).reshape(-1, 1)
-        val_te   = to_te(val_smiles).reshape(-1, 1)
-        test_te  = to_te(test_smiles).reshape(-1, 1)
-
-        # 2) Build ML dataset for interpretability model:
-        #    [experimental feats] + [OrganicContaminant_TE] + [graph feats]
-        X_train = np.hstack([train_feats, train_te, train_graph_feats])
-        X_val   = np.hstack([val_feats,   val_te,   val_graph_feats])
-        X_test  = np.hstack([test_feats,  test_te,  test_graph_feats])
-
-        y_train = train_tgt.reshape(-1)
-        y_val   = val_tgt.reshape(-1)
-        y_test  = test_tgt.reshape(-1)
-
-        # Feature names
-        exp_names = list(numerical_features)
-        te_name = ["OrganicContaminant_TE"]
-        graph_names = [f"Graph_{i}" for i in range(train_graph_feats.shape[1])]
-        feat_names = exp_names + te_name + graph_names
-
-        # 3) Train an XGB model for SHAP (fast + stable for SHAP)
-        xgb = XGBRegressor(
-            n_estimators=900,
-            learning_rate=0.03,
-            max_depth=6,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.0,
-            random_state=SEED
-        )
-        xgb.fit(X_train, y_train)
-
-        # Save interpretability model performance
-        pred_test_xgb = xgb.predict(X_test)
-        imp_metrics = _regression_metrics(y_test, pred_test_xgb)
-        pd.DataFrame([imp_metrics]).to_csv(f"{out_prefix}_shap_model_metrics.csv", index=False)
-
-        # 4) SHAP values + beeswarm
-        explainer = shap.TreeExplainer(xgb)
-        shap_values = explainer.shap_values(X_test)
-
-        # Beeswarm plot
-        plt.figure()
-        shap.summary_plot(shap_values, X_test, feature_names=feat_names, show=False, max_display=25)
-        plt.tight_layout()
-        plt.savefig(f"{out_prefix}_SHAP_beeswarm_with_organic_contaminant.png", dpi=300)
-        plt.close()
-
-        # Save mean(|SHAP|) importance as table
-        mean_abs = np.mean(np.abs(shap_values), axis=0)
-        imp_df = pd.DataFrame({"feature": feat_names, "mean_abs_shap": mean_abs})
-        imp_df = imp_df.sort_values("mean_abs_shap", ascending=False)
-        imp_df.to_csv(f"{out_prefix}_SHAP_feature_importance.csv", index=False)
-
-        logger.info("Saved SHAP beeswarm + SHAP feature importance (including OrganicContaminant_TE).")
-
-    except Exception as e:
-        logger.warning(f"SHAP interpretability block failed: {e}")
-    # =========================================================
-
-    # ----------------------- Plots + metrics ---------------------
+    # ----------------------- Plots + regression results ---------------------
     results = []
     dsname = []
 
@@ -402,43 +341,92 @@ def main():
     results_df.to_excel("Regression_results.xlsx")
 
     dataset_dict = {}
-    for name, exp_feats, graph_feats in zip(
+    for nm, exp_feats, graph_feats in zip(
         ["train", "val", "test"],
         [train_feats, val_feats, test_feats],
         [train_graph_feats, val_graph_feats, test_graph_feats],
     ):
-        dataset_dict[name] = np.hstack((exp_feats, graph_feats))
-        if dataset_dict[name].ndim == 1:
-            dataset_dict[name] = dataset_dict[name].reshape(-1, 1)
+        dataset_dict[nm] = np.hstack((exp_feats, graph_feats))
+        if dataset_dict[nm].ndim == 1:
+            dataset_dict[nm] = dataset_dict[nm].reshape(-1, 1)
 
     plot_williams(
-        dataset_dict["train"],
-        dataset_dict["val"],
-        dataset_dict["test"],
-        train_pred,
-        val_pred,
-        test_pred,
-        train_tgt,
-        val_tgt,
-        test_tgt,
-        train_idx,
-        val_idx,
-        test_idx,
+        dataset_dict["train"], dataset_dict["val"], dataset_dict["test"],
+        train_pred, val_pred, test_pred,
+        train_tgt, val_tgt, test_tgt,
+        train_idx, val_idx, test_idx
     )
 
     combined_exp_feats = np.vstack((train_feats, val_feats, test_feats))
     combined_graph_feats = np.vstack((train_graph_feats, val_graph_feats, test_graph_feats))
     combined_targets = np.vstack((train_tgt, val_tgt, test_tgt))
 
-    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-             "Combined", "2D PCA Plot", dimensions=2)
-    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-             "Combined", "3D PCA Plot", dimensions=3)
+    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(), "Combined", "2D PCA Plot", dimensions=2)
+    plot_pca(combined_exp_feats, combined_graph_feats, combined_targets.flatten(), "Combined", "3D PCA Plot", dimensions=3)
+    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(), "Combined", title="2D UMAP Plot", dimensions=2)
+    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(), "Combined", title="3D UMAP Plot", dimensions=3)
 
-    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-              "Combined", title="2D UMAP Plot", dimensions=2)
-    plot_umap(combined_exp_feats, combined_graph_feats, combined_targets.flatten(),
-              "Combined", title="3D UMAP Plot", dimensions=3)
+    # ----------------------- SHAP (interpretable features ONLY) -----------------------
+    # Build SHAP on a tabular model (XGB) using experimental + OrganicContaminant_TE.
+    # This gives a publication-ready beeswarm like the paper.
+    feature_cols = baseline_feature_cols
+    target_col = "logk"
+
+    X_train = train_df[feature_cols].values
+    y_train = train_df[target_col].values
+    X_test = test_df[feature_cols].values
+
+    xgb_shap = XGBRegressor(
+        n_estimators=2000,
+        learning_rate=0.02,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_lambda=1.0,
+        random_state=SEED,
+        n_jobs=-1
+    )
+    xgb_shap.fit(X_train, y_train)
+
+    explainer = shap.Explainer(xgb_shap, X_train)
+    shap_exp = explainer(X_test)
+
+    keep_features = [
+        "OrganicContaminant_TE",
+        "Reactor",
+        "Dosage",
+        "Intensity",
+        "InitialC",
+        "Wavelength",
+        "Temp",
+        "Humid",
+    ]
+    # keep order but only those that exist
+    keep_features = [f for f in keep_features if f in feature_cols]
+    keep_idx = [feature_cols.index(f) for f in keep_features]
+
+    shap_values_clean = shap_exp.values[:, keep_idx]
+    X_test_clean = X_test[:, keep_idx]
+
+    plt.figure(figsize=(7, 5))
+    shap.summary_plot(
+        shap_values_clean,
+        X_test_clean,
+        feature_names=keep_features,
+        show=False
+    )
+    plt.tight_layout()
+    plt.savefig(f"{out_prefix}_SHAP_beeswarm_interpretable_only.png", dpi=300)
+    plt.close()
+
+    mean_abs_clean = np.mean(np.abs(shap_values_clean), axis=0)
+    imp_clean_df = pd.DataFrame({
+        "Feature": keep_features,
+        "MeanAbsSHAP": mean_abs_clean
+    }).sort_values("MeanAbsSHAP", ascending=False)
+
+    imp_clean_df.to_csv(f"{out_prefix}_SHAP_feature_importance_interpretable_only.csv", index=False)
+    logger.info("Saved SHAP beeswarm + importance (interpretable features only).")
 
     logger.info("All plots have been generated and saved.")
 
