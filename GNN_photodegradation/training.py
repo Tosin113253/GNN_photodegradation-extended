@@ -132,9 +132,16 @@ def main():
     # =========================
     
    # --- Collect predictions + features (must run before any vstack) ---
-    train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(train_loader, model, device, criterion)
-    val_pred,   val_tgt,   val_feats,   val_graph_feats,   _ = collect_predictions(val_loader,   model, device, criterion)
-    test_pred,  test_tgt,  test_feats,  test_graph_feats,  _ = collect_predictions(test_loader,  model, device, criterion)
+       
+    train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(
+        train_loader, model, device, criterion
+    )
+    val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(
+        val_loader, model, device, criterion
+    )
+    test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
+        test_loader, model, device, criterion
+    )
     
         
 
