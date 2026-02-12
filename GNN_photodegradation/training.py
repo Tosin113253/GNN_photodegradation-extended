@@ -2,7 +2,11 @@ import os
 import random
 import numpy as np
 import pandas as pd
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.linear_model import Ridge
+from sklearn.ensemble import RandomForestRegressor
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -108,6 +112,118 @@ def main():
     train_idx = train_idx + 1
     val_idx = val_idx + 1
     test_idx = test_idx + 1
+
+
+    #------------------------ Interpretability---------------------
+    def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_col, out_prefix="baseline"):
+        """
+        Train baseline models using ONLY experimental (tabular) features.
+        Saves metrics + feature importance to files for easy reporting.
+        """
+
+    def eval_model(model, X, y):
+        pred = model.predict(X)
+        rmse = float(np.sqrt(mean_squared_error(y, pred)))
+        mae = float(mean_absolute_error(y, pred))
+        r2 = float(r2_score(y, pred))
+        return {"RMSE": rmse, "MAE": mae, "R2": r2}
+
+    # X/y splits
+    X_train = train_df[feature_cols].values
+    y_train = train_df[target_col].values
+
+    X_val = val_df[feature_cols].values
+    y_val = val_df[target_col].values
+
+    X_test = test_df[feature_cols].values
+    y_test = test_df[target_col].values
+
+    models = {
+        # Ridge = strong linear baseline
+        "Ridge": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", Ridge(alpha=1.0, random_state=42))
+        ]),
+
+        # RF = non-linear baseline + feature importance
+        "RandomForest": RandomForestRegressor(
+            n_estimators=600,
+            random_state=42,
+            n_jobs=-1,
+            max_features="sqrt"
+        )
+    }
+
+    all_rows = []
+    featimp_rows = []
+
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+
+        train_metrics = eval_model(model, X_train, y_train)
+        val_metrics = eval_model(model, X_val, y_val)
+        test_metrics = eval_model(model, X_test, y_test)
+
+        row = {
+            "Model": name,
+            "Train_R2": train_metrics["R2"], "Train_RMSE": train_metrics["RMSE"], "Train_MAE": train_metrics["MAE"],
+            "Val_R2": val_metrics["R2"],     "Val_RMSE": val_metrics["RMSE"],     "Val_MAE": val_metrics["MAE"],
+            "Test_R2": test_metrics["R2"],   "Test_RMSE": test_metrics["RMSE"],   "Test_MAE": test_metrics["MAE"],
+        }
+        all_rows.append(row)
+
+        # Feature importance only for RF
+        if name == "RandomForest":
+            importances = model.feature_importances_
+            for f, imp in zip(feature_cols, importances):
+                featimp_rows.append({"Feature": f, "Importance": float(imp)})
+
+    metrics_df = pd.DataFrame(all_rows).sort_values(by="Test_R2", ascending=False)
+    metrics_df.to_csv(f"{out_prefix}_metrics.csv", index=False)
+
+    if featimp_rows:
+        featimp_df = pd.DataFrame(featimp_rows).sort_values(by="Importance", ascending=False)
+        featimp_df.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
+    else:
+        featimp_df = None
+
+    return metrics_df, featimp_df
+
+    # ------------------- Plot feature importance (interpretability) -------------------
+    import matplotlib.pyplot as plt
+    
+    if baseline_featimp is not None:
+        plt.figure(figsize=(6, 4))
+        plt.barh(
+            baseline_featimp["Feature"],
+            baseline_featimp["Importance"]
+        )
+        plt.xlabel("Importance")
+        plt.title("Experimental Feature Importance (Random Forest)")
+        plt.gca().invert_yaxis()
+        plt.tight_layout()
+        plt.savefig("baseline_feature_importance.png", dpi=300)
+        plt.close()
+    
+        logger.info("Feature importance plot saved as baseline_feature_importance.png")
+    # -------------------------------------------------------------------------------
+
+
+    # ------------------- Baseline: Experimental features only -------------------
+    # This does NOT affect GNN training; it just creates a comparison for your paper.
+    baseline_metrics, baseline_featimp = run_experimental_baselines(
+        train_df=train_df,
+        val_df=val_df,
+        test_df=test_df,
+        feature_cols=numerical_features,   # <-- your experimental feature columns
+        target_col="logk",                 # <-- your target column
+        out_prefix="baseline_experimental"
+    )
+
+    logger.info("Baseline (experimental-only) metrics saved to baseline_experimental_metrics.csv")
+    if baseline_featimp is not None:
+        logger.info("Baseline (RF) feature importance saved to baseline_experimental_feature_importance.csv")
+    # --------------------------------------------------------------------------
 
     # ----------------------- Create datasets ---------------------
     train_dataset = Create_Dataset(train_df, numerical_features)
