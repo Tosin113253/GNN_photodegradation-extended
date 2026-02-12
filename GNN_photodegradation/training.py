@@ -70,7 +70,7 @@ def main():
         return
 
     # ----------------------- Coerce numeric ----------------------
-    # Make sure logk is numeric BEFORE filtering
+    # Make sure target + numeric features are numeric
     df["logk"] = pd.to_numeric(df["logk"], errors="coerce")
 
     numerical_features = [
@@ -85,26 +85,12 @@ def main():
     for col in numerical_features:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Drop rows with NaNs in required numeric cols
+    # Drop rows with NaNs in required columns
     before = len(df)
-    df = df.dropna(subset=["logk"] + numerical_features + ["Smile"]).copy()
+    df = df.dropna(subset=["Smile", "logk"] + numerical_features).copy()
     after = len(df)
     if after < before:
         logger.info(f"Dropped {before - after} rows due to NaNs in required columns.")
-
-    # ----------------------- Outlier removal ---------------------
-    # Keep logk between -6 and -1 (inclusive)
-    before = len(df)
-    df = df[(df["logk"] >= -6) & (df["logk"] <= -1)].copy()
-    after = len(df)
-    logger.info(
-        f"Removed {before - after} outliers based on logk range [-6, -1]. "
-        f"Remaining samples: {after}"
-    )
-
-    if len(df) < 20:
-        logger.warning("Dataset became very small after filtering. Check your logk range.")
-        # continue anyway
 
     # Ensure float32 for numeric features
     df[numerical_features] = df[numerical_features].astype(np.float32)
@@ -145,7 +131,6 @@ def main():
     # ----------------------- Model init --------------------------
     experimental_input_dim = train_dataset.experimental_feats.shape[1]
 
-    # Your repo’s GNNModel signature appears to be: GNNModel(gat_input_dim, experimental_input_dim=?)
     # Keep 22 unless you changed node feature size in featurizer.
     model = GNNModel(22, experimental_input_dim=experimental_input_dim)
 
