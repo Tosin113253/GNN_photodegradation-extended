@@ -13,7 +13,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
+import numpy as np
+import shap
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from xgboost import XGBRegressor
+from sklearn.metrics import r2_score
 from GNN_photodegradation.featurizer import Create_Dataset, collate_fn
 from GNN_photodegradation.models.gat_model import GNNModel
 from GNN_photodegradation.evaluations import collect_predictions, compute_regression_stats
@@ -128,12 +133,7 @@ def main():
     
    
     
-    import numpy as np
-    import shap
-    import matplotlib.pyplot as plt
-    from sklearn.decomposition import PCA
-    from xgboost import XGBRegressor
-    from sklearn.metrics import r2_score
+
     
     # 1) Stack experimental feats + graph feats (these are already aligned per row)
     Xexp_all = np.vstack([train_feats, val_feats, test_feats])                 # (N, 7)
