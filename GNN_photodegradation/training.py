@@ -121,97 +121,75 @@ def main():
 
 
     #------------------------ Interpretability---------------------
-    def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_col, out_prefix="baseline"):
-        """
-        Train baseline models using ONLY experimental (tabular) features.
-        Saves metrics + feature importance to files for easy reporting.
-        """
-
-    def eval_model(model, X, y):
-        pred = model.predict(X)
-        rmse = float(np.sqrt(mean_squared_error(y, pred)))
-        mae = float(mean_absolute_error(y, pred))
-        r2 = float(r2_score(y, pred))
-        return {"RMSE": rmse, "MAE": mae, "R2": r2}
-
-    # X/y splits
-    X_train = train_df[feature_cols].values
-    y_train = train_df[target_col].values
-
-    X_val = val_df[feature_cols].values
-    y_val = val_df[target_col].values
-
-    X_test = test_df[feature_cols].values
-    y_test = test_df[target_col].values
-
-    models = {
-        # Ridge = strong linear baseline
-        "Ridge": Pipeline([
-            ("scaler", StandardScaler()),
-            ("model", Ridge(alpha=1.0, random_state=42))
-        ]),
-
-        # RF = non-linear baseline + feature importance
-        "RandomForest": RandomForestRegressor(
-            n_estimators=600,
-            random_state=42,
-            n_jobs=-1,
-            max_features="sqrt"
-        )
-    }
-
-    all_rows = []
-    featimp_rows = []
-
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-
-        train_metrics = eval_model(model, X_train, y_train)
-        val_metrics = eval_model(model, X_val, y_val)
-        test_metrics = eval_model(model, X_test, y_test)
-
-        row = {
-            "Model": name,
-            "Train_R2": train_metrics["R2"], "Train_RMSE": train_metrics["RMSE"], "Train_MAE": train_metrics["MAE"],
-            "Val_R2": val_metrics["R2"],     "Val_RMSE": val_metrics["RMSE"],     "Val_MAE": val_metrics["MAE"],
-            "Test_R2": test_metrics["R2"],   "Test_RMSE": test_metrics["RMSE"],   "Test_MAE": test_metrics["MAE"],
-        }
-        all_rows.append(row)
-
-        # Feature importance only for RF
-        if name == "RandomForest":
-            importances = model.feature_importances_
-            for f, imp in zip(feature_cols, importances):
-                featimp_rows.append({"Feature": f, "Importance": float(imp)})
-
-    metrics_df = pd.DataFrame(all_rows).sort_values(by="Test_R2", ascending=False)
-    metrics_df.to_csv(f"{out_prefix}_metrics.csv", index=False)
-
-    if featimp_rows:
-        featimp_df = pd.DataFrame(featimp_rows).sort_values(by="Importance", ascending=False)
-        featimp_df.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
-    else:
-        featimp_df = None
-
-    return metrics_df, featimp_df
-
-    # ------------------- Plot feature importance (interpretability) -------------------
+    # =========================
+    # SHAP beeswarm WITH Organic Contaminant (single feature)
+    # Put this AFTER collect_predictions(...)
+    # =========================
+    
+    !pip -q install shap xgboost
+    
+    import numpy as np
+    import shap
     import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA
+    from xgboost import XGBRegressor
+    from sklearn.metrics import r2_score
     
-    if baseline_featimp is not None:
-        plt.figure(figsize=(6, 4))
-        plt.barh(
-            baseline_featimp["Feature"],
-            baseline_featimp["Importance"]
-        )
-        plt.xlabel("Importance")
-        plt.title("Experimental Feature Importance (Random Forest)")
-        plt.gca().invert_yaxis()
-        plt.tight_layout()
-        plt.savefig("baseline_feature_importance.png", dpi=300)
-        plt.close()
+    # 1) Stack experimental feats + graph feats (these are already aligned per row)
+    Xexp_all = np.vstack([train_feats, val_feats, test_feats])                 # (N, 7)
+    Xg_all   = np.vstack([train_graph_feats, val_graph_feats, test_graph_feats])  # (N, G)
     
-        logger.info("Feature importance plot saved as baseline_feature_importance.png")
+    # 2) Compress graph features into ONE number => "Organic Contaminant"
+    pca = PCA(n_components=1, random_state=42)
+    organic_contaminant = pca.fit_transform(Xg_all).reshape(-1, 1)  # (N, 1)
+    
+    # 3) Final SHAP input matrix with 8 features total
+    X_all = np.hstack([Xexp_all, organic_contaminant])
+    
+    feature_names = list(numerical_features) + ["Organic Contaminant"]
+    # numerical_features should be:
+    # ['Intensity','Wavelength','Temp','Dosage','InitialC','Humid','Reactor']
+    
+    # 4) Choose what you want SHAP to explain:
+    #    A) explain the *GNN predictions* (recommended for interpretability of your GNN)
+    y_all = np.concatenate([train_pred.reshape(-1), val_pred.reshape(-1), test_pred.reshape(-1)])
+    
+    #    (If instead you want SHAP vs TRUE logk, use this)
+    # y_all = df.loc[np.r_[train_df.index, val_df.index, test_df.index], "logk"].values
+    
+    # 5) Train an interpretable surrogate model on these 8 features
+    surrogate = XGBRegressor(
+        n_estimators=900,
+        learning_rate=0.03,
+        max_depth=4,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_lambda=1.0,
+        random_state=42
+    )
+    surrogate.fit(X_all, y_all)
+    
+    print("Surrogate R2 (how well it matches target being explained):",
+          r2_score(y_all, surrogate.predict(X_all)))
+    
+    # 6) SHAP beeswarm
+    explainer = shap.TreeExplainer(surrogate)
+    shap_values = explainer.shap_values(X_all)
+    
+    plt.figure(figsize=(9, 5.5))
+    shap.summary_plot(
+        shap_values,
+        X_all,
+        feature_names=feature_names,
+        show=False,
+        plot_type="dot"
+    )
+    plt.tight_layout()
+    plt.savefig("SHAP_beeswarm_with_OrganicContaminant.png", dpi=400, bbox_inches="tight")
+    plt.show()
+    
+    print("Saved: SHAP_beeswarm_with_OrganicContaminant.png")
+
     # -------------------------------------------------------------------------------
 
 
