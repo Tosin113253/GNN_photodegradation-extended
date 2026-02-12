@@ -36,25 +36,24 @@ def main():
         logger.error(f"Dataset file not found at {dataset_path}")
         return
 
-    # Load dataset
-    try:
-        df = pd.read_excel(dataset_path)
-        logger.info(f"Dataset loaded successfully with {len(df)} records.")
-    except Exception as e:
-        logger.error(f"Failed to load dataset: {e}")
-        return
+# Load dataset
+try:
+    df = pd.read_excel(dataset_path)
+    logger.info(f"Dataset loaded successfully with {len(df)} records.")
+except Exception as e:
+    logger.error(f"Failed to load dataset: {e}")
+    return
 
-        # ------------------ Outlier removal based on logk range ------------------
-    initial_len = len(df)
-    
-    df = df[(df["logk"] >= -6) & (df["logk"] <= -1)]
-    
-    final_len = len(df)
-    logger.info(
-        f"Removed {initial_len - final_len} outliers based on logk range "
-        f"[-6, -1]. Remaining samples: {final_len}"
-    )
-    # ------------------------------------------------------------------------
+# ------------------ Outlier removal based on logk range ------------------
+initial_len = len(df)
+df = df[(df["logk"] >= -6) & (df["logk"] <= -1)].copy()
+final_len = len(df)
+
+logger.info(
+    f"Removed {initial_len - final_len} outliers based on logk range [-6, -1]. "
+    f"Remaining samples: {final_len}"
+)
+# ------------------------------------------------------------------------
 
 
     # Check required columns
