@@ -91,6 +91,8 @@ def main():
 
     feature_cols = ['Intensity', 'Wavelength', 'Temp', 'Dosage', 'InitialC', 'Humid', 'Reactor']
 
+    target_col = 'logk'
+
     # Drop rows with NaNs in required columns
     before = len(df)
     df = df.dropna(subset=["Smile", "logk"] + numerical_features).copy()
