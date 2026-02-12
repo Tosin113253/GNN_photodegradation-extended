@@ -133,73 +133,73 @@ def main():
     
    # --- Collect predictions + features (must run before any vstack) ---
        
-    train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(
-        train_loader, model, device, criterion
-    )
-    val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(
-        val_loader, model, device, criterion
-    )
-    test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
-        test_loader, model, device, criterion
-    )
+        train_pred, train_tgt, train_feats, train_graph_feats, _ = collect_predictions(
+            train_loader, model, device, criterion
+        )
+        val_pred, val_tgt, val_feats, val_graph_feats, _ = collect_predictions(
+            val_loader, model, device, criterion
+        )
+        test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
+            test_loader, model, device, criterion
+        )
     
         
 
-    
-    # 1) Stack experimental feats + graph feats (these are already aligned per row)
-    Xexp_all = np.vstack([train_feats, val_feats, test_feats])                 # (N, 7)
-    Xg_all   = np.vstack([train_graph_feats, val_graph_feats, test_graph_feats])  # (N, G)
-    
-    # 2) Compress graph features into ONE number => "Organic Contaminant"
-    pca = PCA(n_components=1, random_state=42)
-    organic_contaminant = pca.fit_transform(Xg_all).reshape(-1, 1)  # (N, 1)
-    
-    # 3) Final SHAP input matrix with 8 features total
-    X_all = np.hstack([Xexp_all, organic_contaminant])
-    
-    feature_names = list(numerical_features) + ["Organic Contaminant"]
-    # numerical_features should be:
-    # ['Intensity','Wavelength','Temp','Dosage','InitialC','Humid','Reactor']
-    
-    # 4) Choose what you want SHAP to explain:
-    #    A) explain the *GNN predictions* (recommended for interpretability of your GNN)
-    y_all = np.concatenate([train_pred.reshape(-1), val_pred.reshape(-1), test_pred.reshape(-1)])
-    
-    #    (If instead you want SHAP vs TRUE logk, use this)
-    # y_all = df.loc[np.r_[train_df.index, val_df.index, test_df.index], "logk"].values
-    
-    # 5) Train an interpretable surrogate model on these 8 features
-    surrogate = XGBRegressor(
-        n_estimators=900,
-        learning_rate=0.03,
-        max_depth=4,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        reg_lambda=1.0,
-        random_state=42
-    )
-    surrogate.fit(X_all, y_all)
-    
-    print("Surrogate R2 (how well it matches target being explained):",
-          r2_score(y_all, surrogate.predict(X_all)))
-    
-    # 6) SHAP beeswarm
-    explainer = shap.TreeExplainer(surrogate)
-    shap_values = explainer.shap_values(X_all)
-    
-    plt.figure(figsize=(9, 5.5))
-    shap.summary_plot(
-        shap_values,
-        X_all,
-        feature_names=feature_names,
-        show=False,
-        plot_type="dot"
-    )
-    plt.tight_layout()
-    plt.savefig("SHAP_beeswarm_with_OrganicContaminant.png", dpi=400, bbox_inches="tight")
-    plt.show()
-    
-    print("Saved: SHAP_beeswarm_with_OrganicContaminant.png")
+        
+        # 1) Stack experimental feats + graph feats (these are already aligned per row)
+        Xexp_all = np.vstack([train_feats, val_feats, test_feats])                 # (N, 7)
+        Xg_all   = np.vstack([train_graph_feats, val_graph_feats, test_graph_feats])  # (N, G)
+        
+        # 2) Compress graph features into ONE number => "Organic Contaminant"
+        pca = PCA(n_components=1, random_state=42)
+        organic_contaminant = pca.fit_transform(Xg_all).reshape(-1, 1)  # (N, 1)
+        
+        # 3) Final SHAP input matrix with 8 features total
+        X_all = np.hstack([Xexp_all, organic_contaminant])
+        
+        feature_names = list(numerical_features) + ["Organic Contaminant"]
+        # numerical_features should be:
+        # ['Intensity','Wavelength','Temp','Dosage','InitialC','Humid','Reactor']
+        
+        # 4) Choose what you want SHAP to explain:
+        #    A) explain the *GNN predictions* (recommended for interpretability of your GNN)
+        y_all = np.concatenate([train_pred.reshape(-1), val_pred.reshape(-1), test_pred.reshape(-1)])
+        
+        #    (If instead you want SHAP vs TRUE logk, use this)
+        # y_all = df.loc[np.r_[train_df.index, val_df.index, test_df.index], "logk"].values
+        
+        # 5) Train an interpretable surrogate model on these 8 features
+        surrogate = XGBRegressor(
+            n_estimators=900,
+            learning_rate=0.03,
+            max_depth=4,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            random_state=42
+        )
+        surrogate.fit(X_all, y_all)
+        
+        print("Surrogate R2 (how well it matches target being explained):",
+              r2_score(y_all, surrogate.predict(X_all)))
+        
+        # 6) SHAP beeswarm
+        explainer = shap.TreeExplainer(surrogate)
+        shap_values = explainer.shap_values(X_all)
+        
+        plt.figure(figsize=(9, 5.5))
+        shap.summary_plot(
+            shap_values,
+            X_all,
+            feature_names=feature_names,
+            show=False,
+            plot_type="dot"
+        )
+        plt.tight_layout()
+        plt.savefig("SHAP_beeswarm_with_OrganicContaminant.png", dpi=400, bbox_inches="tight")
+        plt.show()
+        
+        print("Saved: SHAP_beeswarm_with_OrganicContaminant.png")
 
     # -------------------------------------------------------------------------------
 
