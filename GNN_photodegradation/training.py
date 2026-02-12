@@ -8,7 +8,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
 
 import torch
 import torch.nn as nn
@@ -17,10 +16,9 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-# OPTIONAL: Only used if you enable SHAP later.
-# Do NOT pip install inside this file.
-# import shap
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+import shap
+from xgboost import XGBRegressor
 
 from GNN_photodegradation.featurizer import Create_Dataset, collate_fn
 from GNN_photodegradation.models.gat_model import GNNModel
@@ -80,15 +78,6 @@ def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_c
             random_state=SEED,
             n_jobs=-1
         ),
-        "XGBoost": XGBRegressor(
-            n_estimators=800,
-            learning_rate=0.03,
-            max_depth=6,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.0,
-            random_state=SEED
-        )
     }
 
     rows = []
@@ -101,21 +90,9 @@ def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_c
         pred_val   = model.predict(X_val)
         pred_test  = model.predict(X_test)
 
-        rows.append({
-            "Model": name,
-            "Split": "Train",
-            **_regression_metrics(y_train, pred_train)
-        })
-        rows.append({
-            "Model": name,
-            "Split": "Val",
-            **_regression_metrics(y_val, pred_val)
-        })
-        rows.append({
-            "Model": name,
-            "Split": "Test",
-            **_regression_metrics(y_test, pred_test)
-        })
+        rows.append({"Model": name, "Split": "Train", **_regression_metrics(y_train, pred_train)})
+        rows.append({"Model": name, "Split": "Val",   **_regression_metrics(y_val, pred_val)})
+        rows.append({"Model": name, "Split": "Test",  **_regression_metrics(y_test, pred_test)})
 
         if name == "RandomForest":
             rf_featimp = pd.DataFrame({
@@ -130,6 +107,20 @@ def run_experimental_baselines(train_df, val_df, test_df, feature_cols, target_c
         rf_featimp.to_csv(f"{out_prefix}_feature_importance.csv", index=False)
 
     return metrics_df, rf_featimp
+
+
+def _get_smiles_from_dataset(dataset, fallback_df):
+    """
+    Tries to retrieve SMILES in the SAME ORDER as the dataset used by the DataLoader.
+    Falls back safely if Create_Dataset doesn't store df internally.
+    """
+    for attr in ["df", "data_df", "raw_df"]:
+        if hasattr(dataset, attr):
+            d = getattr(dataset, attr)
+            if isinstance(d, pd.DataFrame) and "Smile" in d.columns:
+                return d["Smile"].values
+    # fallback: same order as fallback_df (best effort)
+    return fallback_df["Smile"].values
 
 
 def main():
@@ -184,14 +175,12 @@ def main():
     feature_cols = numerical_features
     target_col = "logk"
 
-    # Drop rows with NaNs in required columns
     before = len(df)
     df = df.dropna(subset=["Smile", "logk"] + numerical_features).copy()
     after = len(df)
     if after < before:
         logger.info(f"Dropped {before - after} rows due to NaNs in required columns.")
 
-    # Ensure float32 for numeric features
     df[numerical_features] = df[numerical_features].astype(np.float32)
     df["logk"] = df["logk"].astype(np.float32)
 
@@ -209,7 +198,7 @@ def main():
     test_idx = test_idx + 1
 
     # ------------------- Baseline: experimental only -------------------
-    baseline_metrics, baseline_featimp = run_experimental_baselines(
+    run_experimental_baselines(
         train_df=train_df,
         val_df=val_df,
         test_df=test_df,
@@ -217,7 +206,7 @@ def main():
         target_col=target_col,
         out_prefix="baseline_experimental"
     )
-    logger.info("Baseline metrics saved to baseline_experimental_metrics.csv")
+    logger.info("Baseline (experimental-only) metrics saved to baseline_experimental_metrics.csv")
     # ------------------------------------------------------------------
 
     # ----------------------- Create datasets ---------------------
@@ -270,7 +259,6 @@ def main():
 
         avg_train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
 
-        # Validation
         model.eval()
         val_losses = []
         with torch.no_grad():
@@ -292,7 +280,6 @@ def main():
             f"- Train Loss: {avg_train_loss:.4f} - Val Loss: {avg_val_loss:.4f}"
         )
 
-        # Early stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), "best_model.pth")
@@ -317,6 +304,84 @@ def main():
     test_pred, test_tgt, test_feats, test_graph_feats, _ = collect_predictions(
         test_loader, model, device, criterion
     )
+
+    # =========================================================
+    # SHAP beeswarm WITH Organic Contaminant (single feature)
+    # Put this AFTER collect_predictions(...)
+    # =========================================================
+    try:
+        # 1) Build target encoding from TRAIN ONLY
+        train_smiles = _get_smiles_from_dataset(train_dataset, train_df)
+        val_smiles   = _get_smiles_from_dataset(val_dataset, val_df)
+        test_smiles  = _get_smiles_from_dataset(test_dataset, test_df)
+
+        # train_df may have different order; use train_dataset order for mapping by making a Series from train_dataset df if available
+        # We compute mapping using the original train_df (safe and standard)
+        te_map = train_df.groupby("Smile")["logk"].mean().to_dict()
+        te_global = float(train_df["logk"].mean())
+
+        def to_te(smiles_arr):
+            return np.array([te_map.get(s, te_global) for s in smiles_arr], dtype=np.float32)
+
+        train_te = to_te(train_smiles).reshape(-1, 1)
+        val_te   = to_te(val_smiles).reshape(-1, 1)
+        test_te  = to_te(test_smiles).reshape(-1, 1)
+
+        # 2) Build ML dataset for interpretability model:
+        #    [experimental feats] + [OrganicContaminant_TE] + [graph feats]
+        X_train = np.hstack([train_feats, train_te, train_graph_feats])
+        X_val   = np.hstack([val_feats,   val_te,   val_graph_feats])
+        X_test  = np.hstack([test_feats,  test_te,  test_graph_feats])
+
+        y_train = train_tgt.reshape(-1)
+        y_val   = val_tgt.reshape(-1)
+        y_test  = test_tgt.reshape(-1)
+
+        # Feature names
+        exp_names = list(numerical_features)
+        te_name = ["OrganicContaminant_TE"]
+        graph_names = [f"Graph_{i}" for i in range(train_graph_feats.shape[1])]
+        feat_names = exp_names + te_name + graph_names
+
+        # 3) Train an XGB model for SHAP (fast + stable for SHAP)
+        xgb = XGBRegressor(
+            n_estimators=900,
+            learning_rate=0.03,
+            max_depth=6,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            random_state=SEED
+        )
+        xgb.fit(X_train, y_train)
+
+        # Save interpretability model performance
+        pred_test_xgb = xgb.predict(X_test)
+        imp_metrics = _regression_metrics(y_test, pred_test_xgb)
+        pd.DataFrame([imp_metrics]).to_csv(f"{out_prefix}_shap_model_metrics.csv", index=False)
+
+        # 4) SHAP values + beeswarm
+        explainer = shap.TreeExplainer(xgb)
+        shap_values = explainer.shap_values(X_test)
+
+        # Beeswarm plot
+        plt.figure()
+        shap.summary_plot(shap_values, X_test, feature_names=feat_names, show=False, max_display=25)
+        plt.tight_layout()
+        plt.savefig(f"{out_prefix}_SHAP_beeswarm_with_organic_contaminant.png", dpi=300)
+        plt.close()
+
+        # Save mean(|SHAP|) importance as table
+        mean_abs = np.mean(np.abs(shap_values), axis=0)
+        imp_df = pd.DataFrame({"feature": feat_names, "mean_abs_shap": mean_abs})
+        imp_df = imp_df.sort_values("mean_abs_shap", ascending=False)
+        imp_df.to_csv(f"{out_prefix}_SHAP_feature_importance.csv", index=False)
+
+        logger.info("Saved SHAP beeswarm + SHAP feature importance (including OrganicContaminant_TE).")
+
+    except Exception as e:
+        logger.warning(f"SHAP interpretability block failed: {e}")
+    # =========================================================
 
     # ----------------------- Plots + metrics ---------------------
     results = []
