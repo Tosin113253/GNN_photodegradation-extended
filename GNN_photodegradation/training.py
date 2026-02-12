@@ -38,6 +38,8 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 # ---------------------------------------------------------------
 
+out_prefix = "GAT"
+
 
 def main():
     dataset_path = DATA_path
