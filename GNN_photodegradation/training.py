@@ -98,7 +98,7 @@ def main():
 
     # ----------------------- Split dataset -----------------------
     train_df, temp_df, train_idx, temp_idx = train_test_split(
-        df, df.index, test_size=0.3, random_state=SEED
+        df, df.index, test_size=0.25, random_state=SEED
     )
     val_df, test_df, val_idx, test_idx = train_test_split(
         temp_df, temp_df.index, test_size=0.5, random_state=SEED
@@ -140,7 +140,7 @@ def main():
 
     # ----------------------- Train setup -------------------------
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
     logger.info("Loss function, optimizer, and scheduler defined.")
 
