@@ -126,7 +126,7 @@ def main():
     # Put this AFTER collect_predictions(...)
     # =========================
     
-    !pip -q install shap xgboost
+   
     
     import numpy as np
     import shap
