@@ -51,7 +51,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 # ---------------------------------------------------------------
 
-out_prefix = "GAT"  # used in filenames
+out_prefix = "GCN"  # used in filenames
 
 
 def _safe_metrics(y_true, y_pred):
